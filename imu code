@@ -1,0 +1,173 @@
+#include <Wire.h>
+#include <math.h>
+
+#define MPU_ADDR 0x68
+#define PWR_MGMT_1     0x6B
+#define ACCEL_XOUT_H   0x3B
+
+#define RUN_TIME_MS 20000   // run time variable 
+
+
+#define SAMPLE_INTERVAL_MS 1000  // Sample interval 100 ms (10 Hz)
+
+
+// Scale factors
+#define ACCEL_SCALE 16384.0   // LSB/g
+#define GYRO_SCALE  131.0     // LSB/(deg/s)
+
+// Complementary filter coefficient
+#define ALPHA 0.98
+
+// Orientation state
+float pitch = 0.0;
+float roll  = 0.0;
+
+// Gyro offsets
+float gyroX_offset = 0;
+float gyroY_offset = 0;
+float gyroZ_offset = 0;
+
+// Timing
+unsigned long lastSampleTime = 0;
+unsigned long startTime = 0;
+
+//IMU READ
+bool readIMU(int16_t &ax, int16_t &ay, int16_t &az,
+             int16_t &gx, int16_t &gy, int16_t &gz) {
+
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(ACCEL_XOUT_H);
+  if (Wire.endTransmission(false) != 0) return false;
+
+  if (Wire.requestFrom(MPU_ADDR, (uint8_t)14) != 14) return false;
+
+  ax = (Wire.read() << 8) | Wire.read();
+  ay = (Wire.read() << 8) | Wire.read();
+  az = (Wire.read() << 8) | Wire.read();
+
+  Wire.read(); Wire.read(); // temperature (ignored)
+
+  gx = (Wire.read() << 8) | Wire.read();
+  gy = (Wire.read() << 8) | Wire.read();
+  gz = (Wire.read() << 8) | Wire.read();
+
+  return true;
+}
+
+// SETUP 
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Wire.begin(22, 21);
+  Wire.setClock(100000);
+// VCC TO 3V3, GND TO GND, SCL TO PIN21, SDA TO PIN22
+  // Wake IMU
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(PWR_MGMT_1);
+  Wire.write(0x00);
+  Wire.endTransmission();
+
+  Serial.println("=== Gyro Calibration ===");
+  Serial.println("Keep IMU still...");
+
+  // Gyro calibration
+  const int calibSamples = 50;
+  int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
+
+  for (int i = 0; i < calibSamples; i++) {
+    int16_t ax, ay, az, gx, gy, gz;
+    if (readIMU(ax, ay, az, gx, gy, gz)) {
+      gx_sum += gx;
+      gy_sum += gy;
+      gz_sum += gz;
+    }
+    delay(100);
+  }
+
+  gyroX_offset = gx_sum / (float)calibSamples;
+  gyroY_offset = gy_sum / (float)calibSamples;
+  gyroZ_offset = gz_sum / (float)calibSamples;
+
+  Serial.println("Calibration complete");
+  Serial.println("----------------------------------------");
+  Serial.println("Sampling every 100 ms for 20 seconds");
+  Serial.println("----------------------------------------");
+
+  startTime = millis();
+  lastSampleTime = startTime;
+}
+
+//LOOP 
+void loop() {
+  unsigned long now = millis();
+  unsigned long elapsed = now - startTime;
+
+  // Stop after defined runtime
+  if (elapsed > RUN_TIME_MS) {
+  return;
+}
+
+  if (now - lastSampleTime >= SAMPLE_INTERVAL_MS) {
+    lastSampleTime += SAMPLE_INTERVAL_MS;
+
+    int16_t ax_raw, ay_raw, az_raw;
+    int16_t gx_raw, gy_raw, gz_raw;
+
+    if (!readIMU(ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw)) {
+      Serial.println("IMU read failed");
+      return;
+    }
+
+    // Convert units
+    float ax = ax_raw / ACCEL_SCALE;
+    float ay = ay_raw / ACCEL_SCALE;
+    float az = az_raw / ACCEL_SCALE;
+
+    float gx = (gx_raw - gyroX_offset) / GYRO_SCALE;
+    float gy = (gy_raw - gyroY_offset) / GYRO_SCALE;
+    float gz = (gz_raw - gyroZ_offset) / GYRO_SCALE;
+
+    // Fixed timestep (100 ms = 0.1 s)
+    float dt = SAMPLE_INTERVAL_MS / 1000.0;
+
+    // Accelerometer angles
+    float accelRoll  = atan2(ay, az) * 180.0 / PI;
+    float accelPitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+
+    // Gyro integration
+    roll  += gx * dt;
+    pitch += gy * dt;
+
+    // Complementary filter
+    roll  = ALPHA * roll  + (1.0 - ALPHA) * accelRoll;
+    pitch = ALPHA * pitch + (1.0 - ALPHA) * accelPitch;
+
+    // CLEAN OUTPUT
+    Serial.print("Time: ");
+    Serial.print(elapsed);
+    Serial.println(" ms");
+
+    Serial.print("Accel (g)  X: ");
+    Serial.print(ax, 3);
+    Serial.print("  Y: ");
+    Serial.print(ay, 3);
+    Serial.print("  Z: ");
+    Serial.println(az, 3);
+
+    Serial.print("Gyro (deg/s) X: ");
+    Serial.print(gx, 2);
+    Serial.print("  Y: ");
+    Serial.print(gy, 2);
+    Serial.print("  Z: ");
+    Serial.println(gz, 2);
+
+    Serial.print("Pitch: ");
+    Serial.print(pitch, 2);
+    Serial.print(" deg   Roll: ");
+    Serial.print(roll, 2);
+    Serial.println(" deg");
+
+    Serial.println("----------------------------------------");
+  }
+}
