@@ -1,0 +1,68 @@
+#include <ESP32Servo.h>
+
+const int PPM_PIN = 2;
+const int SERVO_PIN = 26;
+const int CHANNELS = 6;
+
+volatile int ppm[CHANNELS];
+volatile unsigned long lastPulse = 0;
+volatile int currentChannel = 0;
+
+Servo myServo;
+
+void IRAM_ATTR ppmInterrupt() {
+  unsigned long now = micros();
+  unsigned long pulseWidth = now - lastPulse;
+  lastPulse = now;
+  
+  if (pulseWidth > 3000) {  // Sync pulse detected
+    currentChannel = 0;
+  } else if (currentChannel < CHANNELS && pulseWidth > 700 && pulseWidth < 2300) {
+    ppm[currentChannel] = pulseWidth;
+    currentChannel++;
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  
+  pinMode(PPM_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PPM_PIN), ppmInterrupt, RISING);
+  
+  delay(1000);
+  
+  myServo.attach(SERVO_PIN);
+  myServo.write(90);
+  
+  Serial.println("PPM Receiver Active - Controlling with CH3");
+}
+
+void loop() {
+  // Display all channels
+  Serial.print("CH1:");
+  Serial.print(ppm[0]);
+  Serial.print(" CH2:");
+  Serial.print(ppm[1]);
+  Serial.print(" CH3:");
+  Serial.print(ppm[2]);
+  Serial.print(" CH4:");
+  Serial.print(ppm[3]);
+  Serial.print(" CH5:");
+  Serial.print(ppm[4]);
+  Serial.print(" CH6:");
+  Serial.print(ppm[5]);
+  
+  // Control servo with CH3 (index 2) - this one is changing in your output!
+  int chValue = ppm[2];  
+  
+  if (chValue > 900 && chValue < 2100) {
+    int angle = map(chValue, 1000, 2000, 0, 180);
+    angle = constrain(angle, 0, 180);
+    myServo.write(angle);
+    Serial.print(" -> Servo:");
+    Serial.print(angle);
+  }
+  
+  Serial.println();
+  delay(100);
+}
